@@ -1,9 +1,14 @@
 import os
 import cv2
 import torch
+import json
+import numpy as np
 from pdf_extract_kit.registry import MODEL_REGISTRY
 from pdf_extract_kit.utils.visualization import visualize_bbox
 from pdf_extract_kit.dataset.dataset import ImageDataset
+
+# 修改输出格式
+from .visualization_modified_structure_output import output_detection_results
 
 @MODEL_REGISTRY.register('layout_detection_yolo')
 class LayoutDetectionYOLO:
@@ -63,6 +68,7 @@ class LayoutDetectionYOLO:
         results = []
         for idx, image in enumerate(images):
             result = self.model.predict(image, imgsz=self.img_size, conf=self.conf_thres, iou=self.iou_thres, verbose=False)[0]
+            
             if self.visualize:
                 if not os.path.exists(result_path):
                     os.makedirs(result_path)
@@ -91,5 +97,41 @@ class LayoutDetectionYOLO:
                 
                 # Save the visualized result                
                 cv2.imwrite(os.path.join(result_path, result_name), vis_result)
+
+                # 保存检测结果为 json 格式
+                detection_results = output_detection_results(image, boxes, classes, scores, self.id_to_names)
+                result_name_json = f"{base_name}_results.json"
+                with open(os.path.join(result_path, result_name_json), 'w', encoding='utf-8') as json_file:
+                    json_file.write(detection_results)
+            else:
+                if not os.path.exists(result_path):
+                    os.makedirs(result_path)
+                boxes = result.__dict__['boxes'].xyxy
+                classes = result.__dict__['boxes'].cls
+                scores = result.__dict__['boxes'].conf
+
+                if self.iou_thres > 0:
+                    indices = self.nms_func(boxes=torch.Tensor(boxes), scores=torch.Tensor(scores),iou_threshold=self.iou_thres)
+                    boxes, scores, classes = boxes[indices], scores[indices], classes[indices]
+                    if len(boxes.shape) == 1:
+                        boxes = np.expand_dims(boxes, 0)
+                        scores = np.expand_dims(scores, 0)
+                        classes = np.expand_dims(classes, 0)
+                
+                # 当不需要可视化时，调用 output_detection_results
+                detection_results = output_detection_results(image, boxes, classes, scores, self.id_to_names)
+
+                # Determine the base name of the image
+                if image_ids:
+                    base_name = image_ids[idx]
+                else:
+                    # base_name = os.path.basename(image)
+                    base_name = os.path.splitext(os.path.basename(image))[0]  # Remove file extension
+
+                # 保存检测结果为 json 格式
+                result_name = f"{base_name}_results.json"
+                with open(os.path.join(result_path, result_name), 'w', encoding='utf-8') as json_file:
+                    json_file.write(detection_results)
+
             results.append(result)
         return results
